@@ -193,6 +193,7 @@ class MediaChannel
 
     public function __construct(Socket $socket, string $callId)
     {
+
         $this->socket = $socket;
         $this->callId = $callId;
         $this->channelEncode = new bcg729Channel();
@@ -312,25 +313,6 @@ class MediaChannel
                 }
             }
 
-            $calculateAdaptiveTimeout = function () use (&$timeoutHistory) {
-                $adaptiveTimeoutBase = 0.16;
-                if (empty($timeoutHistory)) {
-                    return $adaptiveTimeoutBase;
-                }
-                $recentTimeouts = array_slice($timeoutHistory, -10);
-                $avgTimeout = array_sum($recentTimeouts) / count($recentTimeouts);
-                return min(8.0, $adaptiveTimeoutBase + $avgTimeout * 0.5);
-            };
-
-            $updateConnectionHealth = function (&$connectionHealthScore, $packetReceived, $timeSinceLastPacket) {
-                if ($packetReceived) {
-                    $connectionHealthScore = min(100, $connectionHealthScore + 2);
-                } else {
-                    $penalty = $timeSinceLastPacket > 5 ? 10 : 5;
-                    $connectionHealthScore = max(0, $connectionHealthScore - $penalty);
-                }
-            };
-
             // Calcula o incremento de timestamp baseado na frequência e tamanho do pacote (20ms padrão)
             $calculateTimestampIncrement = function (int $frequency, int $payloadType): int {
                 // Para G729 (PT 18): 10 bytes = 10ms de áudio
@@ -352,7 +334,7 @@ class MediaChannel
                 if (!$packet) {
                     // timeout de 3s
 
-                    if ($currentTime - $lastPacketTime > 3) {
+                    if ($currentTime - $lastPacketTime > $this->connectTimeout) {
 
                         // encerrar
                         $this->unblock();
@@ -365,17 +347,17 @@ class MediaChannel
 
                     }
 
-                    if ($this->adaptationEnabled) {
-                        $expectedMember = false;
-                        $expectedMember = array_key_first($this->members) ?? false;
-                        if (!$expectedMember) {
-                            continue;
-                        }
-                        $buffer = $this->members[$expectedMember]['rtpChannel']->buildAudioPacket(str_repeat("\x00", 160));
-                        $this->socket->sendto($expectedMember, $this->members[$expectedMember]['port'], $buffer);
-                        cli::pcl( "TIMEOUT: sending silence to {$expectedMember}", 'bold_red');
-                        Coroutine::sleep(0.1);
+
+                    $expectedMember = false;
+                    $expectedMember = array_key_first($this->members) ?? false;
+                    if (!$expectedMember) {
+                        cli::pcl("TIMEOUT: no members to send silence to", 'bold_red');
+                        continue;
                     }
+                    $buffer = $this->members[$expectedMember]['rtpChannel']->buildAudioPacket(str_repeat("\x00\x00", 160));
+                    $this->socket->sendto($expectedMember, $this->members[$expectedMember]['port'], $buffer);
+                    cli::pcl("TIMEOUT: sending silence to {$expectedMember}", 'bold_red');
+                    Coroutine::sleep(0.5);
                     continue;
                 }
 
@@ -422,7 +404,7 @@ class MediaChannel
                 $pcmData = false;
 
 
-                if (is_callable($this->onReceiveCallable)) go($this->onReceiveCallable, $rtpc, $peer, $this);
+                if (is_callable($this->onReceiveCallable)) go($this->onReceiveCallable, $rtpc, $peer, $this, $this->rtpChans[$ssrc]);
 
                 if (!array_key_exists($rtpc->getCodec(), $this->ptCodecs)) {
                     $member = $this->members[$idFrom] ?? null;

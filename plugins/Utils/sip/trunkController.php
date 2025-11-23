@@ -191,6 +191,7 @@ class trunkController
     private string|int|null $ptUse;
     private array $sdp;
     public Closure $onBuildAudio;
+    public rtpChannel $rtpChannel;
 
     public function __construct(mixed $username, mixed $password, mixed $host, mixed $port = 5060, mixed $domain = false)
     {
@@ -204,7 +205,7 @@ class trunkController
         $this->onFailedCallback = null;
         $this->onAnswerCallback = null;
         $this->onRingingCallback = null;
-        $this->audioReceivePort = network::getFreePort();
+
         if (str_contains($host, "http")) {
             $caseUrl = parse_url($host);
         } else {
@@ -225,6 +226,10 @@ class trunkController
         $this->callId = bin2hex(secure_random_bytes(8));
         $this->socket = new Socket(AF_INET, SOCK_DGRAM, SOL_UDP);
         $this->rtpSocket = new Socket(AF_INET, SOCK_DGRAM, SOL_UDP);
+        $this->rtpSocket->bind('0.0.0.0', network::getFreePort('udp'));
+
+        $this->audioReceivePort = $this->rtpSocket->getsockname()['port'];
+        cli::pcl("Audio Receive Port: {$this->audioReceivePort}");
         $this->localIp = $this->socket->getsockname()["address"];
 
 
@@ -965,74 +970,10 @@ class trunkController
 
     public function send2833($digit, int $durationMs = 200, int $volume = 10): void
     {
-        // Requer socket/destino inicializados por sendSilence()
-        if (empty($this->rtpSocket) || empty($this->remoteIp) || empty($this->remotePort)) {
-            print cli::cl("bold_red", "[2833] socket/destino não inicializados.");
-            return;
+        $sequences = $this->rtpChannel->generateDtmfSequence($digit);
+        foreach ($sequences as $sequence) {
+            $this->rtpSocket->sendto($this->remoteIp, $this->remotePort, $sequence);
         }
-
-        /** @var Socket $socket */
-        $socket = $this->rtpSocket;
-        $ip = $this->remoteIp;
-        $port = $this->remotePort;
-
-        // Mapeia o dígito → event id (RFC 2833)
-        $event = match (strtoupper($digit)) {
-            '0' => 0,
-            '1' => 1,
-            '2' => 2,
-            '3' => 3,
-            '4' => 4,
-            '5' => 5,
-            '6' => 6,
-            '7' => 7,
-            '8' => 8,
-            '9' => 9,
-            '*' => 10,
-            '#' => 11,
-            'A' => 12,
-            'B' => 13,
-            'C' => 14,
-            'D' => 15,
-            default => 0
-        };
-
-        // PT de telephone-event (negociado no SDP; comum: 101)
-        $ptTelephoneEvent = property_exists($this, 'ptTelephoneEvent') ? (int)$this->ptTelephoneEvent : 101;
-
-        // RFC 2833: o timestamp dos pacotes do mesmo evento deve permanecer CONSTANTE
-        $eventTs = $this->timestamp;        // timestamp de início do evento
-        $stepMs = 40;                       // envia em passos de 20ms
-        $stepSmpl = 80;                     // 20ms @ 8kHz
-        $totalSteps = max(3, (int)ceil($durationMs / $stepMs)); // mínimo 3 (start, cont, end)
-        $finalDurationSmpl = $totalSteps * $stepSmpl;
-
-        // START (marker bit = 1)
-        $durationSmpl = $stepSmpl; // cumulativo
-        $payload = pack('CCCC', $event, $volume, ($durationSmpl >> 8) & 0xFF, $durationSmpl & 0xFF);
-        $hdr = pack('CCnNN', 0x80, 0x80 | $ptTelephoneEvent, $this->sequenceNumber++, $eventTs, $this->ssrc);
-        $socket->sendto($ip, $port, $hdr . $payload);
-        Coroutine::sleep($stepMs / 1000);
-
-        // CONTINUE frames (se houver)
-        for ($i = 2; $i <= $totalSteps - 1; $i++) {
-            $durationSmpl = $i * $stepSmpl;  // cumulativo
-            $payload = pack('CCCC', $event, $volume, ($durationSmpl >> 8) & 0xFF, $durationSmpl & 0xFF);
-            $hdr = pack('CCnNN', 0x80, $ptTelephoneEvent, $this->sequenceNumber++, $eventTs, $this->ssrc);
-            $socket->sendto($ip, $port, $hdr . $payload);
-            Coroutine::sleep($stepMs / 1000);
-        }
-
-        // END (E bit = 1) — envia 3 vezes p/ confiabilidade
-        $payloadEnd = pack('CCCC', $event, 0x80 | ($volume & 0x3F), ($finalDurationSmpl >> 8) & 0xFF, $finalDurationSmpl & 0xFF);
-        for ($r = 0; $r < 3; $r++) {
-            $hdr = pack('CCnNN', 0x80, $ptTelephoneEvent, $this->sequenceNumber++, $eventTs, $this->ssrc);
-            $socket->sendto($ip, $port, $hdr . $payloadEnd);
-            Coroutine::sleep($stepMs / 1000);
-        }
-
-        // Avança o timestamp global pelo tempo gasto no evento (mantém timeline contínua)
-        $this->timestamp = $eventTs + $finalDurationSmpl;
     }
 
     public function call(string $to, $maxRings = 120): bool
@@ -1086,7 +1027,7 @@ class trunkController
                 $remotePortAudioDestination = explode(" ", $receive["sdp"]["m"][0])[1];
                 $this->audioRemoteIp = $remoteAddressAudioDestination;
                 $this->audioRemotePort = (int)$remotePortAudioDestination;
-                $this->receiveMedia();
+                //$this->receiveMedia();
             }
             if (!array_key_exists("Call-ID", $receive["headers"])) {
                 if (array_key_exists("i", $receive["headers"])) {
@@ -1291,7 +1232,7 @@ class trunkController
             "s" => [$this->userAgent],
             "c" => ["IN IP4 {$this->localIp}"],
             "t" => ["0 0"],
-            "m" => ["audio {$this->audioReceivePort} RTP/AVP " . implode(' ', array_keys($this->mapLearn))],
+            "m" => ["audio {$this->rtpSocket->getsockname()['port']} RTP/AVP " . implode(' ', array_keys($this->mapLearn))],
             "a" => [
                 'ssrc:' . $this->ssrc . ' cname:' . (!empty($this->callerId) ? $this->callerId : $this->username) . "@{$this->localIp}",
                 ...$this->codecRtpMap,
@@ -1300,6 +1241,7 @@ class trunkController
             ],
         ];
         $this->sdp = $sdp;
+        cli::pcl("audio {$this->rtpSocket->getsockname()['port']} RTP/AVP " . implode(' ', array_keys($this->mapLearn)), 'bold_green');
         $this->ptUse = array_key_first($this->mapLearn);
         $this->ptTelephoneEvent = array_key_last($this->mapLearn);
         $this->codecName = self::getSDPModelCodecs($this->sdp['a'])['preferredCodec']['name'];
@@ -1414,7 +1356,10 @@ class trunkController
             $this->remotePort = $this->audioRemotePort;
 
 
-            cli::pcl("Proxy de áudio iniciado na porta " . $this->localIp . ":{$this->audioReceivePort}");
+            $rtpSocket = $this->rtpSocket;
+            $rtpSocket->bind($this->localIp, $this->audioReceivePort);
+            $rtpSocket->connect($this->remoteIp, $this->remotePort);
+            cli::pcl("Proxy de áudio iniciado na porta " . $this->localIp . ":" . $rtpSocket->getsockname()['port']);
             $this->lastSpeakTime = microtime(true);
             $this->speakWaitSequence = [];
             $this->waitingEnd = 0;
@@ -1433,12 +1378,8 @@ class trunkController
             $audioFile = $this->audioFilePath;
 
 
-            $rtpSocket = new Swoole\Coroutine\Socket(AF_INET, SOCK_DGRAM, 0);
-            $rtpSocket->bind($this->localIp, $this->audioReceivePort);
-            $rtpSocket->connect($this->remoteIp, $this->remotePort);
-
-
             $media = new MediaChannel($rtpSocket, $this->callId);
+
             $media->portList = $this->audioReceivePort;
 
             $media->codecMapper = [
@@ -1463,7 +1404,14 @@ class trunkController
 
 
             $rtpChannel = new RtpChannel($this->ptUse, $this->frequencyCall, 20, $this->ssrc);
-            $media->onReceive(function (rtpc $rtpc, array $peer, MediaChannel $channel) use ($rtpSocket, $rtpChannel, $silPayload20ms) {
+            $this->rtpChannel = $rtpChannel;
+            $fp = $rtpChannel->buildAudioPacket($silPayload20ms);
+            $rtpSocket->sendto($this->audioRemoteIp, $this->audioRemotePort, $fp);
+
+
+            $media->onReceive(function (rtpc $rtpc, array $peer, MediaChannel $channel, rtpChannel $rtpChannel) use ($rtpSocket, $silPayload20ms) {
+
+
                 $fp = $rtpChannel->buildAudioPacket($silPayload20ms);
                 $rtpSocket->sendto($this->audioRemoteIp, $this->audioRemotePort, $fp);
                 $targetId = $peer['address'] . ':' . $peer['port'];
@@ -1478,18 +1426,15 @@ class trunkController
                     'L16' => pcmLeToBe($rtpc->payloadRaw),
                     default => $rtpc->payloadRaw,
                 };
-                $this->bufferAudio .= $pcmData;
+                go($this->onReceiveAudioCallback, $pcmData, $peer, $this);
             });
 
             $fp = $rtpChannel->buildAudioPacket($silPayload20ms);
             $rtpSocket->sendto($this->audioRemoteIp, $this->audioRemotePort, $fp);
             $media->start();
-  $rtpSocket->sendto($this->audioRemoteIp, $this->audioRemotePort, $fp);
-
+            $fp = $rtpChannel->buildAudioPacket($silPayload20ms);
+            $rtpSocket->sendto($this->audioRemoteIp, $this->audioRemotePort, $fp);
             $media->block();
-            var_dump($rtpSocket->getpeername());
-
-
         });
     }
 
@@ -1610,8 +1555,8 @@ class trunkController
                 "Via" => ["SIP/2.0/UDP {$this->localIp}:{$this->socket->getsockname()["port"]};branch=z9hG4bK-" . bin2hex(secure_random_bytes(4))],
                 "From" => ["<sip:{$this->username}@{$this->host}>;tag=" . bin2hex(secure_random_bytes(8))],
                 "Max-Forwards" => ["70"],
-                "User-Agent" => [cache::global()["interface"]["server"]["serverName"]],
-                "Contact" => [trunkController::renderURI([
+                "User-Agent" => ["{$this->userAgent}"],
+                "Contact" => [sip::renderURI([
                     "user" => $this->username,
                     "peer" => [
                         "host" => $this->socket->getsockname()["address"],
@@ -2161,74 +2106,6 @@ class trunkController
     public function onReceiveAudio(Closure $param)
     {
         $this->onReceiveAudioCallback = $param;
-    }
-
-    private function generateDtmfTonePCM(string $digit, int $durationMs, int $sampleRate): string
-    {
-        $dtmfFrequencies = [
-            "1" => [
-                697,
-                1209,
-            ],
-            "2" => [
-                697,
-                1336,
-            ],
-            "3" => [
-                697,
-                1477,
-            ],
-            "4" => [
-                770,
-                1209,
-            ],
-            "5" => [
-                770,
-                1336,
-            ],
-            "6" => [
-                770,
-                1477,
-            ],
-            "7" => [
-                852,
-                1209,
-            ],
-            "8" => [
-                852,
-                1336,
-            ],
-            "9" => [
-                852,
-                1477,
-            ],
-            "0" => [
-                941,
-                1336,
-            ],
-            "*" => [
-                941,
-                1209,
-            ],
-            "#" => [
-                941,
-                1477,
-            ],
-        ];
-        if (!isset($dtmfFrequencies[$digit])) {
-            $numSamples = (int)($sampleRate * $durationMs / 1000);
-            return str_repeat("\x00\x00", $numSamples);
-        }
-        [$f1, $f2] = $dtmfFrequencies[$digit];
-        $numSamples = (int)($sampleRate * $durationMs / 1000);
-        $pcmData = "";
-        for ($n = 0; $n < $numSamples; $n++) {
-            $sample = sin(2 * M_PI * $f1 * $n / $sampleRate) + sin(2 * M_PI * $f2 * $n / $sampleRate);
-            $sample = $sample / 2 * 0.8;
-            $sample = (int)($sample * 32767);
-            $pcmData .= pack("s", $sample);
-        }
-        return $pcmData;
     }
 
     private function generateEmptyWavFile(string $path, int $durationSec): void

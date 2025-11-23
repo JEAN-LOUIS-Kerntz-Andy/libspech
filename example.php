@@ -28,30 +28,34 @@ include 'plugins/autoloader.php';
     $phone->onHangup(function (trunkController $phone) use (&$audioBuffer) {
 
         \Plugin\Utils\cli::pcl("Chamada finalizada");
-       $pcm = $phone->bufferAudio;
-       $phone->saveBufferToWavFile('audio.wav', $pcm);
+        $pcm = $phone->bufferAudio;
+        $phone->saveBufferToWavFile('audio.wav', $pcm);
 
     });
 
 
-    $phone->onAnswer(function ($call) {
+    $phone->onAnswer(function (trunkController $phone) {
+        $phone->receiveMedia();
+        \Plugin\Utils\cli::pcl("Chamada aceita", "green");
+        \Swoole\Coroutine::sleep(10);
+        $phone->send2833('*');
+
+        \Swoole\Coroutine::sleep(10);
+
+        $phone->socket->sendto($phone->host, $phone->port, sip::renderSolution(
+            \handlers\renderMessages::generateBye($phone->headers200['headers'])
+        ));
 
     });
 
 
-    $phone->onReceiveAudio(function ($pcmData, $peer) use (&$audioBuffer) {
-
-        $audioBuffer .= $pcmData;
-    });
-    $phone->onBeforeAudioBuild(function ($data) {
-        \Plugin\Utils\cli::pcl(strlen($data) . " bytes de áudio");
-        return $data;
+    $phone->onReceiveAudio(function ($pcmData, $peer, trunkController $phone) {
+        $phone->bufferAudio .= $pcmData;
     });
 
 
     $phone->prefix = 4479;
     $phone->call('551140040104');
-
 
 
 });
