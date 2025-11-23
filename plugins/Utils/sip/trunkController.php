@@ -279,7 +279,7 @@ class trunkController
 
         /** @var ? $peer */
         print $this->socket->recvfrom($peer, 1);
-
+        $this->mountLineCodecSDP();
 
 
     }
@@ -1985,6 +1985,12 @@ class trunkController
         if (strlen($this->username) < 1) {
             return true;
         }
+        if (strlen($this->password) < 1) {
+            return true;
+        }
+
+
+
         if ($this->registerCount > 3) {
             return false;
         }

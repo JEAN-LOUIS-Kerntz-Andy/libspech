@@ -4,7 +4,7 @@ include 'plugins/autoloader.php';
 
 
 \Swoole\Coroutine\run(function () {
-    $username = '';
+    $username = 'lotus';
     $password = '';
     $domain = 'spechshop.com';
     $host = gethostbyname($domain);
