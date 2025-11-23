@@ -101,32 +101,29 @@ include 'plugins/autoloader.php';
 
 ```
 libspech/
-├── plugins/                      # Core library modules
-│   ├── autoloader.php           # Custom autoloader
-│   ├── configInterface.json     # Autoload configuration
-│   ├── Extension/               # PHP extensions and utilities
-│   │   ├── plugins/             # Helper plugins (EventEmitter, DialogManager, etc.)
-│   │   └── terminal/            # Terminal/shell utilities
-│   ├── Packet/                  # SIP packet handlers
-│   │   ├── controller/          # SIP message controllers (200, 401, 404, etc.)
-│   │   └── routes/              # SIP routing logic
-│   ├── Start/                   # Initialization modules
-│   │   ├── console/             # Console handlers
-│   │   └── events/              # Event system
-│   └── Utils/                   # Utility classes
-│       ├── cache/               # Caching mechanisms
-│       ├── cli/                 # CLI utilities
-│       ├── network/             # Network utilities
-│       └── sip/                 # SIP core classes
-│           ├── trunkController.php    # Main trunk controller
-│           ├── softphone.php          # Softphone implementation
-│           ├── rtpChannel.php         # RTP channel handler
-│           ├── AudioQualityDetector.php
-│           ├── AdaptiveBuffer.php
-│           └── ...
-├── example.php                  # Usage example
-├── c.php                        # Stub generator utility
-└── README.md                    # This file
+├── plugins/                      # Módulos principais da biblioteca
+│   ├── autoloader.php           # Autoloader customizado
+│   ├── configInterface.json     # Configuração do autoloader
+│   ├── Packet/                  # Manipuladores de pacotes SIP
+│   │   └── controller/
+│   │       └── renderMessages.php    # Renderização de mensagens SIP
+│   └── Utils/                   # Classes utilitárias
+│       ├── cache/               # Mecanismos de cache
+│       │   ├── cache.php        # Cache global
+│       │   └── rpcClient.php    # Cliente RPC
+│       ├── cli/                 # Utilitários CLI
+│       │   └── cli.php          # Output colorido no console
+│       ├── network/             # Utilitários de rede
+│       │   └── network.php      # Resolução de IP e portas
+│       └── sip/                 # Classes core do SIP
+│           ├── trunkController.php    # Controlador de trunking principal
+│           ├── sip.php                # Parser e render de mensagens SIP
+│           ├── phone.php              # Gerenciamento de telefone/chamadas
+│           ├── rtpChannels.php        # Criação de pacotes RTP
+│           └── rtpc.php               # Parser de pacotes RTP
+├── stubs/                       # Stubs para autocomplete de IDE
+├── example.php                  # Exemplo de uso
+└── README.md                    # Este arquivo
 ```
 
 ## Scripts
@@ -135,14 +132,6 @@ libspech/
 
 ```bash
 php example.php
-```
-
-### Gerar Esqueletos de Extensão
-
-O script `c.php` gera stubs PHP para extensões C (útil para autocompletar em IDEs):
-
-```bash
-php c.php
 ```
 
 ## Configuração
@@ -157,13 +146,8 @@ O autoloader é configurado via `plugins/configInterface.json`:
     "Utils/cache",
     "Utils/cli",
     "Utils/sip",
-    "Start/events",
-    "Packet/controller",
-    "Packet/routes",
-    "Start/console",
-    "Extension/plugins",
-    "Extension/terminal",
-    "Utils/network"
+    "Utils/network",
+    "Packet/controller"
   ],
   "reloadCaseFileModify": []
 }
@@ -192,16 +176,11 @@ Framework de teste ainda não implementado.
 
 - ✅ Registro SIP com autenticação (digest MD5)
 - ✅ Iniciação de chamada de saída
-- ✅ Atendimento de chamadas receptivas
 - ✅ Streaming de áudio RTP
 - ✅ Suporte RTCP
-- ✅ Suporte a múltiplos codecs
-- ✅ Detecção de qualidade de áudio
-- ✅ Buffer adaptativo
-- ✅ Manipulação de eventos DTMF
-- ✅ Transferência de chamada (REFER)
-- ✅ Gerenciamento de diálogo
-- ✅ Arquitetura orientada a eventos
+- ✅ Suporte a múltiplos codecs (PCMU, PCMA, G.729)
+- ✅ Arquitetura orientada a eventos (callbacks para ringing, answer, hangup, audio)
+- ✅ Tratamento de mensagens SIP (INVITE, ACK, BYE, etc.)
 
 ## Limitações conhecidas
 

@@ -10,13 +10,6 @@ class cache
 {
 
 
-    public static function arrayTBU(array $array, \ServerSocket $socket, $primaryId = 'u'): void
-    {
-        foreach ($array as $value)
-            if (array_key_exists($primaryId, $value))
-                $socket->tbu->set($value[$primaryId], ['data' => json_encode($value)]);
-    }
-
     public static function arrayShift(string $key): mixed
     {
         $element = self::get($key);

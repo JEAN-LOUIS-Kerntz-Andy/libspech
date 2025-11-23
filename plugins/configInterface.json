@@ -3,10 +3,8 @@
     "Utils/cache",
     "Utils/cli",
     "Utils/sip",
-    "Start/console",
-    "Extension/plugins",
-    "Extension/terminal",
-     "Utils/network"
-   ],
+    "Utils/network",
+    "Packet/controller"
+  ],
   "reloadCaseFileModify": []
 }
