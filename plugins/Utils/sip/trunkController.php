@@ -1,19 +1,20 @@
 <?php
 
+
 use handlers\renderMessages;
 use Plugin\Utils\cli;
 use plugin\Utils\network;
 use plugins\Utils\cache;
+use Random\RandomException;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Socket;
-use Swoole\StringObject;
 
 
 function secure_random_bytes(int $length): string
 {
     try {
         return random_bytes($length);
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         $fs = '';
         for (; $length--;) $fs .= chr(mt_rand(0, 255));
         return $fs;
@@ -190,34 +191,15 @@ class trunkController
     public $onReceiveAudioCallback = null;
     public int $speakStartThreshold = 2;
     public int $speakEndThreshold = 3;
+    public $prefix = '';
+    public array $ptsRegistered = [];
+    public array $ptsDtmfRegistered = [];
+    public array $mapLearn = [];
     private array $alawTable = [];
     private array $ulawTable = [];
     private bool $proxyMediaActive = false;
     private ?string $currentProxyId = null;
     private $userAgent;
-    public $prefix = '';
-
-    public static function extractVia(string $line): array
-    {
-        $result = [];
-
-        // Divide o início do Via (protocolo e endereço) do resto
-        if (preg_match('/^SIP\/2\.0\/(?P<transport>\w+)\s+(?P<host>[^;]+)/i', $line, $match)) {
-            $result['transport'] = strtoupper($match['transport']);
-            $hostParts = explode(':', $match['host']);
-            $result['address'] = $hostParts[0];
-            $result['port'] = isset($hostParts[1]) ? (int)$hostParts[1] : null;
-        }
-
-        // Extrai os parâmetros restantes (branch, rport, received, etc.)
-        if (preg_match_all('/;\s*([^=;]+)=([^;]+)/', $line, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as [$_, $key, $value]) {
-                $result[trim($key)] = trim($value);
-            }
-        }
-
-        return $result;
-    }
 
     public function __construct(mixed $username, mixed $password, mixed $host, mixed $port = 5060, mixed $domain = false)
     {
@@ -269,7 +251,6 @@ class trunkController
         $this->members = [];
 
 
-
         // send options
 
 
@@ -284,10 +265,24 @@ class trunkController
 
     }
 
-
-    public array $ptsRegistered = [];
-    public array $ptsDtmfRegistered = [];
-    public array $mapLearn = [];
+    public function modelOptions(): array
+    {
+        return [
+            "method" => "OPTIONS",
+            "methodForParser" => "OPTIONS sip:{$this->host} SIP/2.0",
+            "headers" => [
+                "Via" => ["SIP/2.0/UDP {$this->localIp}:{$this->socketPortListen};branch=z9hG4bK-" . bin2hex(secure_random_bytes(4)) . ';rport'],
+                "From" => ["<sip:{$this->username}@{$this->host}>"],
+                "To" => ["<sip:{$this->host}>"],
+                "Max-Forwards" => ["70"],
+                "Call-ID" => [$this->callId],
+                "CSeq" => [$this->csq . " OPTIONS"],
+                "User-Agent" => [$this->userAgent],
+                "Allow" => ["INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY, MESSAGE"],
+                "Content-Length" => ["0"],
+            ]
+        ];
+    }
 
     public function mountLineCodecSDP(string $codec = 'PCMA/8000'): array
     {
@@ -358,33 +353,26 @@ class trunkController
         ];
     }
 
-
-    public function defineCodecs(array $codecs = [8, 101]): void
+    public static function extractVia(string $line): array
     {
-        $codecMediaLine = "";
-        $codecRtpMap = [];
+        $result = [];
 
-
-        if (in_array(101, $codecs)) {
-            $key = array_search(101, $codecs);
-            unset($codecs[$key]);
-            $codecs[] = 101;
+        // Divide o início do Via (protocolo e endereço) do resto
+        if (preg_match('/^SIP\/2\.0\/(?P<transport>\w+)\s+(?P<host>[^;]+)/i', $line, $match)) {
+            $result['transport'] = strtoupper($match['transport']);
+            $hostParts = explode(':', $match['host']);
+            $result['address'] = $hostParts[0];
+            $result['port'] = isset($hostParts[1]) ? (int)$hostParts[1] : null;
         }
-        foreach ($codecs as $codec) {
-            if (array_key_exists($codec, $this->supportedCodecs)) {
-                $codecMediaLine .= "{$codec} ";
-                foreach ($this->supportedCodecs[$codec] as $line) {
-                    $codecRtpMap[] = $line;
-                }
+
+        // Extrai os parâmetros restantes (branch, rport, received, etc.)
+        if (preg_match_all('/;\s*([^=;]+)=([^;]+)/', $line, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as [$_, $key, $value]) {
+                $result[trim($key)] = trim($value);
             }
         }
-        $this->codecMediaLine = trim($codecMediaLine);
-        $this->codecRtpMap = $codecRtpMap;
-        $this->codecRtpMap = array_unique($this->codecRtpMap);
 
-        $newImplementation = self::codecsMapper($codecs);
-        $this->codecMediaLine = $newImplementation["codecMediaLine"];
-        $this->codecRtpMap = $newImplementation["codecRtpMap"];
+        return $result;
     }
 
     public static function getSDPModelCodecs(array $sdpAttributes): array
@@ -505,102 +493,121 @@ class trunkController
         return $result;
     }
 
-    public function modelInvite(string $to, $prefix = "", $options = []): array
+    public static function getModelCodecs(array $codecs = [
+        8,
+        101,
+    ]): array
     {
-        $this->calledNumber = $to;
-        if (!$this->username) {
-            if ($this->callerId) {
-                $this->username = $this->callerId;
-            } else {
-                $this->username = "100";
-            }
-        }
-        $this->codecRtpMap = [];
-        $codecs = array_keys($this->mapLearn);
+        $codecMediaLine = "";
+        $codecRtpMap = [];
         foreach ($codecs as $codec) {
-            foreach ($this->mapLearn[$codec] as $media) {
-                $this->codecRtpMap[] = $media;
+            if (array_key_exists($codec, self::$supportedCodecStatic)) {
+                $codecMediaLine .= "{$codec} ";
+                foreach (self::$supportedCodecStatic[$codec] as $line) {
+                    $codecRtpMap[] = $line;
+                }
             }
         }
-        //var_dump( $this->mapLearn);
-
-
-        $sdp = [
-            "v" => ["0"],
-            "o" => ["{$this->ssrc} 0 0 IN IP4 {$this->localIp}"],
-            "s" => [$this->userAgent],
-            "c" => ["IN IP4 {$this->localIp}"],
-            "t" => ["0 0"],
-            "m" => ["audio {$this->audioReceivePort} RTP/AVP " . implode(' ', array_keys($this->mapLearn))],
-            "a" => [
-                'ssrc:' . $this->ssrc . ' cname:' . (!empty($this->callerId) ? $this->callerId : $this->username) . "@{$this->localIp}",
-                ...$this->codecRtpMap,
-                'ptime:20',
-                'sendrecv',
-            ],
+        return [
+            "codecMediaLine" => trim($codecMediaLine),
+            "codecRtpMap" => $codecRtpMap,
         ];
-        if ($this->domain) {
-            $mf = $this->domain;
-        } else {
-            $mf = $this->host;
+    }
+
+    public static function getWavDuration($file): string
+    {
+        if (!file_exists($file)) {
+            return "Arquivo não encontrado";
         }
-        if ($this->port != 5060) {
-            $mf .= ":" . $this->port;
+        $handle = fopen($file, "rb");
+        if (!$handle) {
+            return "Erro ao abrir o arquivo";
         }
-        $toCall = [
-            'user' => ($prefix ?? '') . $to,
-            'peer' => [
-                'host' => $this->domain ?? $this->host,
-                'port' => $this->port ?? 5060,
-            ]
-        ];
-
-
-        if (strlen($prefix) > 0) {
-            $to = $prefix . $to;
+        $header = fread($handle, 44);
+        fclose($handle);
+        if (strlen($header) < 44 || substr($header, 0, 4) != "RIFF" || substr($header, 8, 4) != "WAVE") {
+            return "0:00:00";
         }
-        $this->calledNumber = $to;
-        $settings = [
-            "method" => "INVITE",
-            "methodForParser" => "INVITE sip:{$to}@{$mf} SIP/2.0",
-            "headers" => [
-                "Via" => ["SIP/2.0/UDP {$this->localIp}:{$this->socketPortListen};branch=z9hG4bK64d" .
-                    bin2hex(secure_random_bytes(8) ?? time()) .
-                    ";rport"
-                ],
+        $sampleRate = unpack("V", substr($header, 24, 4))[1];
+        $numChannels = unpack("v", substr($header, 22, 2))[1];
+        $bitDepth = unpack("v", substr($header, 34, 2))[1];
+        $fileSize = filesize($file);
+        $dataSize = $fileSize - 44;
+        $samples = $dataSize / ($numChannels * ($bitDepth / 8));
+        $durationInSeconds = $samples / $sampleRate;
+        $durationInSeconds = round($durationInSeconds);
+        return gmdate("H:i:s", $durationInSeconds);
+    }
 
-                "From" => [sip::renderURI([
-                    "user" => !empty($this->callerId) ? $this->callerId : $this->username,
-                    "peer" => [
-                        "host" => $this->domain ?? $this->host,
-                        "port" => $this->port,
-                    ],
-                    "additional" => ["tag" => bin2hex(secure_random_bytes(10))],
-                ])],
-                "To" => [sip::renderURI($toCall)],
-                "Supported" => ["gruu,replaces"],
-                "User-Agent" => [$this->userAgent],
-                "Call-ID" => [$this->callId],
-                "Allow" => ["INVITE,ACK,BYE,CANCEL,OPTIONS,NOTIFY,MESSAGE,REFER"],
-                "Contact" => ["<sip:{$this->username}@{$this->localIp}:{$this->socketPortListen}>"],
-                "CSeq" => [$this->csq . " INVITE"],
-                "Max-Forwards" => ["70"],
-                "Content-Type" => ["application/sdp"],
-                "Date" => [date("D, d M Y H:i:s T")],
-                "P-Preferred-Identity" => ['"' . $this->callerId . '" ' . sip::renderURI([
-                        'user' => !empty($this->callerId) ? $this->callerId : $this->username,
-                        'peer' => [
-                            'host' => $this->localIp,
-                            'port' => $this->socketPortListen,
-                        ],
-                    ])],
+    public static function resolveCloseCall(string $callId, $options = ["bye" => false], $debugger = false): bool
+    {
 
-            ],
-            "sdp" => $sdp,
-        ];
+        // return false;
+        //  if ($debugger) var_dump($debugger);
+        // var_dump(debug_backtrace());
+        return Coroutine::create(function () use ($callId, $options) {
+            swoole_coroutine_defer(function () use ($callId) {
+                /** @var ServerSocket $ServerSocket */
+                $ServerSocket = cache::get('serverSocket');
+                if ($ServerSocket)
+                    if ($ServerSocket->tpc->exist($callId)) $ServerSocket->tpc->delete($callId);
+
+            });
+
+            $socket = cache::get('serverSocket');
+            if ($socket)
+                if ($socket->tpc->exist($callId)) {
+                    $tpcData = $socket->tpc->get($callId, 'data');
 
 
-        return $settings;
+                    if ($tpcData) {
+                        $tpcDataDecoded = json_decode($tpcData, true);
+                        $hangups = $tpcDataDecoded['hangups'] ?? [];
+
+                        foreach ($hangups as $member => $hangup) {
+                            $model = $hangup['model'] ?? [];
+
+
+                            $socket->sendto($hangup['info']['host'], $hangup['info']['port'], sip::renderSolution($model));
+                            Coroutine::sleep(0.1);
+                            cli::pcl("Enviando BYE para {$hangup['info']['host']} na porta {$hangup['info']['port']}");
+
+                        }
+
+                    }
+                }
+
+
+            return true;
+        });
+    }
+
+    public function defineCodecs(array $codecs = [8, 101]): void
+    {
+        $codecMediaLine = "";
+        $codecRtpMap = [];
+
+
+        if (in_array(101, $codecs)) {
+            $key = array_search(101, $codecs);
+            unset($codecs[$key]);
+            $codecs[] = 101;
+        }
+        foreach ($codecs as $codec) {
+            if (array_key_exists($codec, $this->supportedCodecs)) {
+                $codecMediaLine .= "{$codec} ";
+                foreach ($this->supportedCodecs[$codec] as $line) {
+                    $codecRtpMap[] = $line;
+                }
+            }
+        }
+        $this->codecMediaLine = trim($codecMediaLine);
+        $this->codecRtpMap = $codecRtpMap;
+        $this->codecRtpMap = array_unique($this->codecRtpMap);
+
+        $newImplementation = self::codecsMapper($codecs);
+        $this->codecMediaLine = $newImplementation["codecMediaLine"];
+        $this->codecRtpMap = $newImplementation["codecRtpMap"];
     }
 
     public static function codecsMapper(array $codecs = ['PCMA', 'PCMU', 'RTP2833']): array
@@ -665,52 +672,6 @@ class trunkController
             'codecMediaLine' => implode(' ', $codecMediaLine),
             'codecRtpMap' => $codecRtpMap,
         ];
-    }
-
-    public static function getModelCodecs(array $codecs = [
-        8,
-        101,
-    ]): array
-    {
-        $codecMediaLine = "";
-        $codecRtpMap = [];
-        foreach ($codecs as $codec) {
-            if (array_key_exists($codec, self::$supportedCodecStatic)) {
-                $codecMediaLine .= "{$codec} ";
-                foreach (self::$supportedCodecStatic[$codec] as $line) {
-                    $codecRtpMap[] = $line;
-                }
-            }
-        }
-        return [
-            "codecMediaLine" => trim($codecMediaLine),
-            "codecRtpMap" => $codecRtpMap,
-        ];
-    }
-
-    public static function getWavDuration($file): string
-    {
-        if (!file_exists($file)) {
-            return "Arquivo não encontrado";
-        }
-        $handle = fopen($file, "rb");
-        if (!$handle) {
-            return "Erro ao abrir o arquivo";
-        }
-        $header = fread($handle, 44);
-        fclose($handle);
-        if (strlen($header) < 44 || substr($header, 0, 4) != "RIFF" || substr($header, 8, 4) != "WAVE") {
-            return "0:00:00";
-        }
-        $sampleRate = unpack("V", substr($header, 24, 4))[1];
-        $numChannels = unpack("v", substr($header, 22, 2))[1];
-        $bitDepth = unpack("v", substr($header, 34, 2))[1];
-        $fileSize = filesize($file);
-        $dataSize = $fileSize - 44;
-        $samples = $dataSize / ($numChannels * ($bitDepth / 8));
-        $durationInSeconds = $samples / $sampleRate;
-        $durationInSeconds = round($durationInSeconds);
-        return gmdate("H:i:s", $durationInSeconds);
     }
 
     public function __invoke()
@@ -877,41 +838,6 @@ class trunkController
         });
     }
 
-    public function mixPcmArray(array $chunks): string
-    {
-        if (count($chunks) < 2) {
-            if (isset($chunks[0]) && $chunks[0] instanceof StringObject) {
-                return $chunks[0]->toString();
-            }
-            return $chunks[0] ?? "";
-        }
-        $stringChunks = [];
-        foreach ($chunks as $chunk) {
-            if ($chunk instanceof StringObject) {
-                $stringChunks[] = $chunk->toString();
-            } else {
-                $stringChunks[] = $chunk;
-            }
-        }
-        $minLen = min(array_map("strlen", $stringChunks));
-        $minLen -= $minLen % 2;
-        $result = new StringObject("");
-        for ($i = 0; $i < $minLen; $i += 2) {
-            $mix = 0;
-            foreach ($stringChunks as $buf) {
-                $s = unpack("s", substr($buf, $i, 2))[1];
-                $mix += $s;
-            }
-            if ($mix > 32767) {
-                $mix = 32767;
-            } elseif ($mix < -32768) {
-                $mix = -32768;
-            }
-            $result->append(pack("s", $mix));
-        }
-        return $result->toString();
-    }
-
     public function record(string $file): void
     {
         $this->allowBuffer = true;
@@ -930,11 +856,6 @@ class trunkController
             Coroutine::sleep(0.1);
         }
         return true;
-    }
-
-    public function unblockCoroutine(): bool
-    {
-        return $this->receiveBye = false;
     }
 
     public function onFailed(Closure $callback): void
@@ -1072,7 +993,6 @@ class trunkController
         return max(1, min(100, round($normalized * 100, 2)));
     }
 
-
     public function send2833($digit, int $durationMs = 200, int $volume = 10): void
     {
         // Requer socket/destino inicializados por sendSilence()
@@ -1143,74 +1063,6 @@ class trunkController
 
         // Avança o timestamp global pelo tempo gasto no evento (mantém timeline contínua)
         $this->timestamp = $eventTs + $finalDurationSmpl;
-    }
-
-    private function generateDtmfTonePCM(string $digit, int $durationMs, int $sampleRate): string
-    {
-        $dtmfFrequencies = [
-            "1" => [
-                697,
-                1209,
-            ],
-            "2" => [
-                697,
-                1336,
-            ],
-            "3" => [
-                697,
-                1477,
-            ],
-            "4" => [
-                770,
-                1209,
-            ],
-            "5" => [
-                770,
-                1336,
-            ],
-            "6" => [
-                770,
-                1477,
-            ],
-            "7" => [
-                852,
-                1209,
-            ],
-            "8" => [
-                852,
-                1336,
-            ],
-            "9" => [
-                852,
-                1477,
-            ],
-            "0" => [
-                941,
-                1336,
-            ],
-            "*" => [
-                941,
-                1209,
-            ],
-            "#" => [
-                941,
-                1477,
-            ],
-        ];
-        if (!isset($dtmfFrequencies[$digit])) {
-            $numSamples = (int)($sampleRate * $durationMs / 1000);
-            return str_repeat("\x00\x00", $numSamples);
-        }
-        [$f1, $f2] = $dtmfFrequencies[$digit];
-        $numSamples = (int)($sampleRate * $durationMs / 1000);
-        $pcmData = "";
-        for ($n = 0; $n < $numSamples; $n++) {
-            $sample = sin(2 * M_PI * $f1 * $n / $sampleRate) + sin(2 * M_PI * $f2 * $n / $sampleRate);
-            $sample = $sample / 2 * 0.8;
-            $sample = (int)($sample * 32767);
-            $pcmData .= pack("s", $sample);
-        }
-        return $pcmData;
     }
 
     public function call(string $to, $maxRings = 120): bool
@@ -1440,8 +1292,106 @@ class trunkController
 
     }
 
+    public function modelInvite(string $to, $prefix = "", $options = []): array
+    {
+        $this->calledNumber = $to;
+        if (!$this->username) {
+            if ($this->callerId) {
+                $this->username = $this->callerId;
+            } else {
+                $this->username = "100";
+            }
+        }
+        $this->codecRtpMap = [];
+        $codecs = array_keys($this->mapLearn);
+        foreach ($codecs as $codec) {
+            foreach ($this->mapLearn[$codec] as $media) {
+                $this->codecRtpMap[] = $media;
+            }
+        }
+        //var_dump( $this->mapLearn);
+
+
+        $sdp = [
+            "v" => ["0"],
+            "o" => ["{$this->ssrc} 0 0 IN IP4 {$this->localIp}"],
+            "s" => [$this->userAgent],
+            "c" => ["IN IP4 {$this->localIp}"],
+            "t" => ["0 0"],
+            "m" => ["audio {$this->audioReceivePort} RTP/AVP " . implode(' ', array_keys($this->mapLearn))],
+            "a" => [
+                'ssrc:' . $this->ssrc . ' cname:' . (!empty($this->callerId) ? $this->callerId : $this->username) . "@{$this->localIp}",
+                ...$this->codecRtpMap,
+                'ptime:20',
+                'sendrecv',
+            ],
+        ];
+        if ($this->domain) {
+            $mf = $this->domain;
+        } else {
+            $mf = $this->host;
+        }
+        if ($this->port != 5060) {
+            $mf .= ":" . $this->port;
+        }
+        $toCall = [
+            'user' => ($prefix ?? '') . $to,
+            'peer' => [
+                'host' => $this->domain ?? $this->host,
+                'port' => $this->port ?? 5060,
+            ]
+        ];
+
+
+        if (strlen($prefix) > 0) {
+            $to = $prefix . $to;
+        }
+        $this->calledNumber = $to;
+        $settings = [
+            "method" => "INVITE",
+            "methodForParser" => "INVITE sip:{$to}@{$mf} SIP/2.0",
+            "headers" => [
+                "Via" => ["SIP/2.0/UDP {$this->localIp}:{$this->socketPortListen};branch=z9hG4bK64d" .
+                    bin2hex(secure_random_bytes(8) ?? time()) .
+                    ";rport"
+                ],
+
+                "From" => [sip::renderURI([
+                    "user" => !empty($this->callerId) ? $this->callerId : $this->username,
+                    "peer" => [
+                        "host" => $this->domain ?? $this->host,
+                        "port" => $this->port,
+                    ],
+                    "additional" => ["tag" => bin2hex(secure_random_bytes(10))],
+                ])],
+                "To" => [sip::renderURI($toCall)],
+                "Supported" => ["gruu,replaces"],
+                "User-Agent" => [$this->userAgent],
+                "Call-ID" => [$this->callId],
+                "Allow" => ["INVITE,ACK,BYE,CANCEL,OPTIONS,NOTIFY,MESSAGE,REFER"],
+                "Contact" => ["<sip:{$this->username}@{$this->localIp}:{$this->socketPortListen}>"],
+                "CSeq" => [$this->csq . " INVITE"],
+                "Max-Forwards" => ["70"],
+                "Content-Type" => ["application/sdp"],
+                "Date" => [date("D, d M Y H:i:s T")],
+                "P-Preferred-Identity" => ['"' . $this->callerId . '" ' . sip::renderURI([
+                        'user' => !empty($this->callerId) ? $this->callerId : $this->username,
+                        'peer' => [
+                            'host' => $this->localIp,
+                            'port' => $this->socketPortListen,
+                        ],
+                    ])],
+
+            ],
+            "sdp" => $sdp,
+        ];
+
+
+        return $settings;
+    }
+
     /**
-     * @throws \Random\RandomException
+     * @throws RandomException
      */
 
 
@@ -1693,47 +1643,9 @@ class trunkController
         ];
     }
 
-    public static function resolveCloseCall(string $callId, $options = ["bye" => false], $debugger = false): bool
+    public function unblockCoroutine(): bool
     {
-
-        // return false;
-        //  if ($debugger) var_dump($debugger);
-        // var_dump(debug_backtrace());
-        return Coroutine::create(function () use ($callId, $options) {
-            swoole_coroutine_defer(function () use ($callId) {
-                /** @var ServerSocket $ServerSocket */
-                $ServerSocket = cache::get('serverSocket');
-                if ($ServerSocket)
-                    if ($ServerSocket->tpc->exist($callId)) $ServerSocket->tpc->delete($callId);
-
-            });
-
-            $socket = cache::get('serverSocket');
-            if ($socket)
-                if ($socket->tpc->exist($callId)) {
-                    $tpcData = $socket->tpc->get($callId, 'data');
-
-
-                    if ($tpcData) {
-                        $tpcDataDecoded = json_decode($tpcData, true);
-                        $hangups = $tpcDataDecoded['hangups'] ?? [];
-
-                        foreach ($hangups as $member => $hangup) {
-                            $model = $hangup['model'] ?? [];
-
-
-                            $socket->sendto($hangup['info']['host'], $hangup['info']['port'], sip::renderSolution($model));
-                            Coroutine::sleep(0.1);
-                            cli::pcl("Enviando BYE para {$hangup['info']['host']} na porta {$hangup['info']['port']}");
-
-                        }
-
-                    }
-                }
-
-
-            return true;
-        });
+        return $this->receiveBye = false;
     }
 
     public function bye($registerEvent = true): void
@@ -1990,7 +1902,6 @@ class trunkController
         }
 
 
-
         if ($this->registerCount > 3) {
             return false;
         }
@@ -2049,7 +1960,7 @@ class trunkController
                 $receive = sip::parse($rec);
             }
             if ($receive["method"] == "OPTIONS") {
-                $respond = \handlers\renderMessages::respondOptions($receive["headers"]);
+                $respond = renderMessages::respondOptions($receive["headers"]);
                 $this->socket->sendto($this->host, $this->port, $respond);
             } else if ($receive["headers"]["Call-ID"][0] !== $this->callId) {
                 continue;
@@ -2112,25 +2023,6 @@ class trunkController
         ];
     }
 
-    public function modelOptions(): array
-    {
-        return [
-            "method" => "OPTIONS",
-            "methodForParser" => "OPTIONS sip:{$this->host} SIP/2.0",
-            "headers" => [
-                "Via" => ["SIP/2.0/UDP {$this->localIp}:{$this->socketPortListen};branch=z9hG4bK-" . bin2hex(secure_random_bytes(4)) . ';rport'],
-                "From" => ["<sip:{$this->username}@{$this->host}>"],
-                "To" => ["<sip:{$this->host}>"],
-                "Max-Forwards" => ["70"],
-                "Call-ID" => [$this->callId],
-                "CSeq" => [$this->csq . " OPTIONS"],
-                "User-Agent" => [$this->userAgent],
-                "Allow" => ["INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY, MESSAGE"],
-                "Content-Length" => ["0"],
-            ]
-        ];
-    }
-
     public function sendDtmf(string $digit): bool
     {
         $this->dtmfList[] = $digit;
@@ -2142,6 +2034,41 @@ class trunkController
         $audioBuffer = $this->mixPcmArray([$audioBuffer]);
         $audio = waveHead(strlen($audioBuffer), 8000, 1, 1) . $audioBuffer;
         file_put_contents($caminho, $audio);
+    }
+
+    public function mixPcmArray(array $chunks): string
+    {
+        if (count($chunks) < 2) {
+            if (isset($chunks[0]) && $chunks[0] instanceof StringObject) {
+                return $chunks[0]->toString();
+            }
+            return $chunks[0] ?? "";
+        }
+        $stringChunks = [];
+        foreach ($chunks as $chunk) {
+            if ($chunk instanceof StringObject) {
+                $stringChunks[] = $chunk->toString();
+            } else {
+                $stringChunks[] = $chunk;
+            }
+        }
+        $minLen = min(array_map("strlen", $stringChunks));
+        $minLen -= $minLen % 2;
+        $result = new StringObject("");
+        for ($i = 0; $i < $minLen; $i += 2) {
+            $mix = 0;
+            foreach ($stringChunks as $buf) {
+                $s = unpack("s", substr($buf, $i, 2))[1];
+                $mix += $s;
+            }
+            if ($mix > 32767) {
+                $mix = 32767;
+            } elseif ($mix < -32768) {
+                $mix = -32768;
+            }
+            $result->append(pack("s", $mix));
+        }
+        return $result->toString();
     }
 
     public function registerByeRecovery(array $byeClient, array $destination, $socketPreserve): void
@@ -2200,7 +2127,7 @@ class trunkController
             return false;
         }
         $retry++;
-        $nameFile = \Extension\plugins\utils::baseDir() . '/groups.json';
+        $nameFile = utils::baseDir() . '/groups.json';
         $groups = json_decode(file_get_contents($nameFile), true);
         if (!isset($groups[$groupName])) {
             echo "⚠ Grupo {$groupName} não encontrado.\n";
@@ -2208,8 +2135,8 @@ class trunkController
         }
         $group = $groups[$groupName];
         $agents = $group['agents'];
-        $connectionsFile = \Extension\plugins\utils::baseDir() . 'connections.json';
-        $callsFile = \Extension\plugins\utils::baseDir() . 'calls.json';
+        $connectionsFile = utils::baseDir() . 'connections.json';
+        $callsFile = utils::baseDir() . 'calls.json';
         $excluded = [];
         $callsContent = json_decode(file_get_contents($callsFile), true);
         foreach ($callsContent as $callId => $data) {
@@ -2243,7 +2170,7 @@ class trunkController
         } while (time() - $startTime < $timeout);
         if (empty($agents)) {
             $this->resetTimeout();
-            $baseDir = \Extension\plugins\utils::baseDir();
+            $baseDir = utils::baseDir();
             try {
                 $this->declareAudio($baseDir . 'manage/ivr/espere.wav', 8, true);
             } catch (Exception $e) {
@@ -2341,6 +2268,74 @@ class trunkController
     public function onReceiveAudio(Closure $param)
     {
         $this->onReceiveAudioCallback = $param;
+    }
+
+    private function generateDtmfTonePCM(string $digit, int $durationMs, int $sampleRate): string
+    {
+        $dtmfFrequencies = [
+            "1" => [
+                697,
+                1209,
+            ],
+            "2" => [
+                697,
+                1336,
+            ],
+            "3" => [
+                697,
+                1477,
+            ],
+            "4" => [
+                770,
+                1209,
+            ],
+            "5" => [
+                770,
+                1336,
+            ],
+            "6" => [
+                770,
+                1477,
+            ],
+            "7" => [
+                852,
+                1209,
+            ],
+            "8" => [
+                852,
+                1336,
+            ],
+            "9" => [
+                852,
+                1477,
+            ],
+            "0" => [
+                941,
+                1336,
+            ],
+            "*" => [
+                941,
+                1209,
+            ],
+            "#" => [
+                941,
+                1477,
+            ],
+        ];
+        if (!isset($dtmfFrequencies[$digit])) {
+            $numSamples = (int)($sampleRate * $durationMs / 1000);
+            return str_repeat("\x00\x00", $numSamples);
+        }
+        [$f1, $f2] = $dtmfFrequencies[$digit];
+        $numSamples = (int)($sampleRate * $durationMs / 1000);
+        $pcmData = "";
+        for ($n = 0; $n < $numSamples; $n++) {
+            $sample = sin(2 * M_PI * $f1 * $n / $sampleRate) + sin(2 * M_PI * $f2 * $n / $sampleRate);
+            $sample = $sample / 2 * 0.8;
+            $sample = (int)($sample * 32767);
+            $pcmData .= pack("s", $sample);
+        }
+        return $pcmData;
     }
 
     private function generateEmptyWavFile(string $path, int $durationSec): void
