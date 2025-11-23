@@ -442,6 +442,34 @@ Contribuições são bem-vindas! Para contribuir:
 
 Informações de licença não especificadas. Por favor, contate o autor para detalhes de licenciamento.
 
+### Atribuições e Licenças de Terceiros
+
+Este projeto utiliza e/ou é compatível com as seguintes bibliotecas e tecnologias de terceiros:
+
+- **Swoole** (Apache License 2.0) - Framework assíncrono para PHP
+  - Website: https://www.swoole.com/
+  - GitHub: https://github.com/swoole/swoole-src
+  - Licença: https://github.com/swoole/swoole-src/blob/master/LICENSE
+
+- **bcg729** - Implementação da biblioteca bcg729 da Belledonne Communications
+  - Original: https://github.com/BelledonneCommunications/bcg729
+  - Licença original: GNU General Public License v3.0
+  - Adaptação PHP: https://github.com/berzersks/bcg729
+
+- **Opus Codec** - Codec de áudio de alta qualidade
+  - Xiph.Org Foundation
+  - Website: https://opus-codec.org/
+  - Licença: BSD License
+  - Adaptação PHP: https://github.com/berzersks/opus
+
+- **Protocolo SIP** - Definido pela RFC 3261 (IETF)
+- **Protocolo RTP/RTCP** - Definido pela RFC 3550 (IETF)
+- **Protocolo SDP** - Definido pela RFC 4566 (IETF)
+
+Os usuários devem garantir a conformidade com as licenças das bibliotecas originais ao utilizar este software. As
+extensões PHP (bcg729, opus, psampler) mantêm suas próprias licenças - consulte os repositórios individuais para
+detalhes.
+
 ## Créditos
 
 - **Repositório**: https://github.com/berzersks/libspech
@@ -453,6 +481,16 @@ Informações de licença não especificadas. Por favor, contate o autor para de
 - **bcg729**: https://github.com/berzersks/bcg729 - Codec G.729 para PHP
 - **opus**: https://github.com/berzersks/opus - Codec Opus para PHP
 - **psampler**: https://github.com/berzersks/psampler - Utilitários de amostragem de áudio
+
+### Agradecimentos
+
+Este projeto é possível graças a:
+
+- **Swoole Team** - Pela excelente framework assíncrona para PHP
+- **Belledonne Communications** - Pelo desenvolvimento da biblioteca bcg729 original
+- **Xiph.Org Foundation** - Pelo desenvolvimento do codec Opus
+- **IETF** - Pelos padrões abertos SIP, RTP/RTCP e SDP
+- Comunidade PHP e VoIP open source
 
 ---
 
