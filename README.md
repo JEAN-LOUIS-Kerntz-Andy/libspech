@@ -118,7 +118,6 @@ libspech/
 │       └── sip/                 # Classes core do SIP
 │           ├── trunkController.php    # Controlador de trunking principal
 │           ├── sip.php                # Parser e render de mensagens SIP
-│           ├── phone.php              # Gerenciamento de telefone/chamadas
 │           ├── rtpChannels.php        # Criação de pacotes RTP
 │           └── rtpc.php               # Parser de pacotes RTP
 ├── stubs/                       # Stubs para autocomplete de IDE
