@@ -69,4 +69,19 @@ class rtpChannels
 
         return $packet;
     }
+
+    public function setSsrc(int $ssrc)
+    {
+        $this->ssrc = $ssrc;
+    }
+
+    public function buildAudioPacket(string $encodedData)
+    {
+        return $this->build($encodedData, false);
+    }
+
+    public function setPayloadType(int $codecReceiveType)
+    {
+        $this->codec = $codecReceiveType;
+    }
 }

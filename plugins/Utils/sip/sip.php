@@ -826,6 +826,18 @@ function extractRTPPayload(string $packet): ?string
     return substr($packet, 8);
 }
 
+function waveHead3(int $dataLength, int $sampleRate, int $channels, int $audioFormat): string
+{
+    $bitsPerSample = 16;
+    $byteRate = $sampleRate * $channels * ($bitsPerSample / 8);
+    $blockAlign = $channels * ($bitsPerSample / 8);
+    return pack('a4V', 'RIFF', 36 + $dataLength)
+        . 'WAVE'
+        . pack('a4VvvVVvv', 'fmt ', 16, 1, $channels,
+            $sampleRate, (int)$byteRate, (int)$blockAlign, $bitsPerSample)
+        . pack('a4V', 'data', $dataLength);
+}
+
 function waveHead(int $dataLength, int $sampleRate, int $channels, int $audioFormat): string
 {
     $bitsPerSample = ($audioFormat === 1 ? 16 : 8);

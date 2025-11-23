@@ -17,13 +17,19 @@ include 'plugins/autoloader.php';
     if (!$phone->register(2)) {
         throw new \Exception("Erro ao registrar");
     }
+    $audioBuffer = '';
+    $phone->mountLineCodecSDP('PCMA/8000');
 
 
     $phone->onRinging(function ($call) {
 
     });
 
-    $phone->onHangup(function ($call) {
+    $phone->onHangup(function (trunkController $phone) use (&$audioBuffer) {
+
+        \Plugin\Utils\cli::pcl("Chamada finalizada");
+       $pcm = $phone->bufferAudio;
+       $phone->saveBufferToWavFile('audio.wav', $pcm);
 
     });
 
@@ -32,8 +38,13 @@ include 'plugins/autoloader.php';
 
     });
 
-    $phone->onReceiveAudio(function (...$args) {
-        \Plugin\Utils\cli::pcl(strlen($args[0]) . " bytes received");
+    $phone->onReceiveAudio(function ($pcmData, $peer) use (&$audioBuffer) {
+
+        $audioBuffer .= $pcmData;
+    });
+    $phone->onBeforeAudioBuild(function ($data) {
+        \Plugin\Utils\cli::pcl(strlen($data) . " bytes de áudio");
+        return $data;
     });
 
 
