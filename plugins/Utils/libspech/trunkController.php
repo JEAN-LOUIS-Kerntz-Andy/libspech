@@ -675,8 +675,7 @@ class trunkController
         $level = 0;
         //$this->defineCodecs([8,0,101]);
         $modelInvite = $this->modelInvite($to, $this->prefix);
-        var_dump($this->port, $this->host);
-        $this->socket->sendto($this->host, $this->port, sip::renderSolution($modelInvite));
+         $this->socket->sendto($this->host, $this->port, sip::renderSolution($modelInvite));
         $timeRing = time();
         for (; ;) {
             if ($this->closing || $this->socket->isClosed()) {
@@ -872,8 +871,6 @@ class trunkController
                     $this->callActive = false;
                     $this->unblockCoroutine();
                     if (is_callable($this->onHangupCallback)) {
-                        cli::pcl(sip::renderSolution($receive));
-                        cli::pcl("onHangupCallback invoked!");
                         return go($this->onHangupCallback, $this, $receive, $peer);
                     }
                 }
@@ -884,8 +881,7 @@ class trunkController
                 }
             }
             if ($receive["headers"]["Call-ID"][0] !== $this->callId) {
-                cli::pcl(sip::renderSolution($receive));
-                continue;
+                 continue;
             }
             if ($receive["method"] == "NOTIFY") {
                 $this->callActive = false;
@@ -898,8 +894,7 @@ class trunkController
                 $this->callActive = false;
                 $this->unblockCoroutine();
                 if (is_callable($this->onHangupCallback)) {
-                    cli::pcl(sip::renderSolution($receive));
-                    cli::pcl("onHangupCallback invoked!");
+
                     return go($this->onHangupCallback, $this, $receive, $peer);
                 }
             } elseif ($this->receiveBye) {
@@ -1509,17 +1504,8 @@ class trunkController
         $this->onDtmfCallable = null;
         $this->dtmfCallbacks = [];
 
-        // Limpa canais de codec
-        try {
-            if (isset($this->bcgChannel)) {
-                unset($this->bcgChannel);
-            }
-            if (isset($this->rtpChannel)) {
 
-                unset($this->rtpChannel);
-            }
-        } catch (\Throwable $e) {
-        }
+
 
         // Limpa outras propriedades grandes
         $this->bufferAudio = "";
@@ -1528,20 +1514,10 @@ class trunkController
         $this->members = [];
 
 
-        $this->__destruct();
+
     }
 
-    public function __destruct()
-    {
 
-
-        foreach ($this as $key => $value) {
-            try {
-                $this->{$key} = null;
-            } catch (\Throwable $e) {
-            }
-        }
-    }
 
     public function decodePcmaToPcm(string $input): string
     {
@@ -1591,6 +1567,11 @@ class trunkController
         $this->idTimers[] = Timer::after($time * 1000, function () {
             if ($this->closing || $this->error) {
                 return;
+            }
+            try {
+                $this->bye();
+            } catch (\Throwable $e) {
+                cli::pcl($e->getMessage());
             }
             $this->close();
         });
@@ -1989,17 +1970,13 @@ class trunkController
             if (!empty($agents)) {
                 break;
             }
-            usleep(1000000);
+            interruptibleSleep(0.1, $this->callActive);
         } while (time() - $startTime < $timeout);
         if (empty($agents)) {
             $this->resetTimeout();
             $baseDir = \Extension\plugins\utils::baseDir();
-            try {
 
 
-            } catch (Exception $e) {
-                echo $e->getMessage();
-            }
             return $this->transferGroup($groupName, $retry);
         }
         foreach ($agents as $agent) {
@@ -2012,79 +1989,142 @@ class trunkController
     }
 
 
-
     public function onReceiveAudio(Closure $param)
     {
         $this->onReceiveAudioCallback = $param;
     }
 
-    public function setAudioFile(string $audioFile)
-    {
-        $this->audioFilePath = $audioFile;
-    }
-
     public function defineAudioFile(string $audioFile): void
     {
-        \libspech\Sip\secureAudioVoip($audioFile);
+        try {
+            \libspech\Sip\secureAudioVoip($audioFile);
+        } catch (\Exception $e) {
+            cli::pcl("Error defining audio file: " . $e->getMessage());
+            return;
+        }
+
         $infoFile = \libspech\Sip\getInfoAudio($audioFile);
-        $tags = \libspech\Sip\wavChunks($audioFile);
+        $tags     = \libspech\Sip\wavChunks($audioFile);
+
         $idDataTag = array_find_key($tags, fn($tag) => $tag['id'] === 'data');
-        $chunkSize = \libspech\Sip\calculateChunkSize($infoFile['rate'], $infoFile['numChannels'], $infoFile['bitDepth']);
+        if ($idDataTag === null) {
+            cli::pcl("Error: WAV data chunk not found");
+            return;
+        }
+
+        $chunkSize  = \libspech\Sip\calculateChunkSize(
+            $infoFile['rate'],
+            $infoFile['numChannels'],
+            $infoFile['bitDepth']
+        );
+
         $dataOffset = $tags[$idDataTag]['data'];
+
+        // 🔥 Lê o WAV inteiro em memória
+        $fileData = file_get_contents($audioFile);
+        if ($fileData === false) {
+            cli::pcl("Error reading audio file");
+            return;
+        }
+
+        // Apenas a parte PCM pura
+        $audioData = substr($fileData, $dataOffset);
+        unset($fileData);
+
+        $audioLen = strlen($audioData);
+
+        // 🌀 Começa no zero
         $currentPosition = 0;
-        $audioHandle = fopen($audioFile, 'rb');
 
-        $callable = function ($pcmData, $peer, trunkController $phone) use (&$currentPosition, $audioHandle, $dataOffset, $chunkSize, $infoFile) {
+        $this->onReceiveAudio(function ($pcmData, $peer, trunkController $phone)
+        use (&$currentPosition, $audioData, $audioLen, $chunkSize, $infoFile)
+        {
+            if (empty($this->callActive)) {
+                return;
+            }
+
             $idFrom = $peer['address'] . ':' . $peer['port'];
-            fseek($audioHandle, $dataOffset + $currentPosition);
-            $pcmData = fread($audioHandle, $chunkSize);
-            $currentPosition += $chunkSize;
-
+            $frequencyPacket = $infoFile['rate'];
             $frequencyMember = $phone->frequencyCall;
             $ssrc = $phone->mediaChannel->members[$idFrom]['ssrc'];
-            $frequencyPacket = $infoFile['rate'];
+
+            // --- LOOP INFINITO LIMPO ---
+            if ($currentPosition + $chunkSize > $audioLen) {
+                // Parte faltando
+                $rest = $audioLen - $currentPosition;
+
+                if ($rest > 0) {
+                    $part1 = substr($audioData, $currentPosition, $rest);
+                } else {
+                    $part1 = '';
+                }
+
+                // Completa com início do arquivo
+                $part2 = substr($audioData, 0, $chunkSize - $rest);
+
+                $pcmChunk = $part1 . $part2;
+
+                // Reinicia posição
+                $currentPosition = ($chunkSize - $rest);
+            } else {
+                // Chunk normal
+                $pcmChunk = substr($audioData, $currentPosition, $chunkSize);
+                $currentPosition += $chunkSize;
+            }
+
+            // ----------------------------
+            // Codec processing
+            // ----------------------------
 
             switch (strtoupper($phone->codecName)) {
+
                 case 'PCMU':
                     if ($frequencyPacket !== 8000) {
-                        $pcmData = resampler($pcmData, $frequencyPacket, 8000);
+                        $pcmChunk = resampler($pcmChunk, $frequencyPacket, 8000);
                     }
-                    $encode = encodePcmToPcmu($pcmData);
+                    $encode = encodePcmToPcmu($pcmChunk);
                     break;
+
                 case 'PCMA':
                     if ($frequencyPacket !== 8000) {
-                        $pcmData = resampler($pcmData, $frequencyPacket, 8000);
+                        $pcmChunk = resampler($pcmChunk, $frequencyPacket, 8000);
                     }
-                    $encode = encodePcmToPcma($pcmData);
+                    $encode = encodePcmToPcma($pcmChunk);
                     break;
+
                 case 'G729':
                     if ($frequencyPacket !== 8000) {
-                        $pcmData = resampler($pcmData, $frequencyPacket, 8000);
+                        $pcmChunk = resampler($pcmChunk, $frequencyPacket, 8000);
                     }
-                    $encode = $phone->mediaChannel->rtpChans[$ssrc]->bcg729Channel->encode($pcmData);
+                    $encode = $phone->mediaChannel->rtpChans[$ssrc]
+                        ->bcg729Channel->encode($pcmChunk);
                     break;
+
                 case 'OPUS':
                     if ($frequencyPacket !== 48000) {
-                        $pcm48_mono = resampler($pcmData, $frequencyPacket, 48000);
+                        $pcm48 = resampler($pcmChunk, $frequencyPacket, 48000);
                     } else {
-                        $pcm48_mono = $pcmData;
+                        $pcm48 = $pcmChunk;
                     }
-                    $encode = $phone->mediaChannel->members[$idFrom]['opus']->encode($pcm48_mono);
+                    $encode = $phone->mediaChannel->members[$idFrom]['opus']
+                        ->encode($pcm48);
                     break;
+
                 case 'L16':
-                    $encode = resampler($pcmData, $frequencyPacket, $frequencyMember, true);
+                    $encode = resampler($pcmChunk, $frequencyPacket, $frequencyMember, true);
                     break;
+
                 default:
-                    $encode = '';
-                    break;
+                    return;
             }
+
+            if (!$encode) return;
 
             $packet = $phone->rtpChannel->buildAudioPacket($encode);
             $phone->rtpSocket->sendto($peer['address'], $peer['port'], $packet);
-        };
-
-        $this->onReceiveAudio($callable(...));
+        });
     }
+
 
     /**
      * Extrai PCM bruto e informações do arquivo WAV
@@ -2140,6 +2180,8 @@ class trunkController
     {
         return $this->cid;
     }
+
+
 
     private function generateEmptyWavFile(string $path, int $durationSec): void
     {
